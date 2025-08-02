@@ -1,0 +1,115 @@
+import os
+from azure.identity import DefaultAzureCredential
+from azure.mgmt.compute import ComputeManagementClient
+from azure.mgmt.network import NetworkManagementClient
+
+# --- Configuration Variables ---
+# Best practice: Load these from a secure config or environment variables
+SUBSCRIPTION_ID = os.environ.get("AZURE_SUBSCRIPTION_ID")
+RESOURCE_GROUP_NAME = "auto-vmRG"
+VM_NAME = "my-python-vm"
+VM_SIZE = "Standard_B1s"
+LOCATION = "eastus"
+
+# Networking details for the NIC
+VNET_NAME = "auto-vitrualnet"
+SUBNET_NAME = "default"
+NIC_NAME = f"{VM_NAME}-nic"
+
+# VM Admin credentials
+ADMIN_USERNAME = "azureuser"
+ADMIN_PASSWORD = "ThisIsAComplexPassword123!"  # ⚠️ For demo only. Use SSH keys in production.
+
+# --- Create Network Interface Card ---
+def create_nic(network_client, subnet_id):
+    """Creates a Network Interface Card (NIC) for the VM."""
+    print(f"Creating Network Interface: {NIC_NAME}...")
+    nic_params = {
+        "location": LOCATION,
+        "ip_configurations": [{
+            "name": "ipconfig1",
+            "subnet": {"id": subnet_id}
+        }]
+    }
+    poller = network_client.network_interfaces.begin_create_or_update(
+        RESOURCE_GROUP_NAME, NIC_NAME, nic_params
+    )
+    nic_result = poller.result()
+    print(f" > NIC '{nic_result.name}' created.")
+    return nic_result
+
+# --- Create Virtual Machine ---
+def create_vm(compute_client, nic_id):
+    """Creates the Virtual Machine."""
+    print(f"Creating Virtual Machine: {VM_NAME}...")
+    vm_params = {
+        "location": LOCATION,
+        "properties": {
+            "hardwareProfile": {"vmSize": VM_SIZE},
+            "storageProfile": {
+                "imageReference": {
+                    "publisher": "Canonical",
+                    "offer": "UbuntuServer",
+                    "sku": "18.04-LTS",
+                    "version": "latest"
+                },
+                "osDisk": {
+                    "createOption": "FromImage",
+                    "managedDisk": {
+                        "storageAccountType": "Standard_LRS"
+                    }
+                }
+            },
+            "osProfile": {
+                "computerName": VM_NAME,
+                "adminUsername": ADMIN_USERNAME,
+                "adminPassword": ADMIN_PASSWORD
+            },
+            "networkProfile": {
+                "networkInterfaces": [{
+                    "id": nic_id
+                }]
+            }
+        }
+    }
+    poller = compute_client.virtual_machines.begin_create_or_update(
+        RESOURCE_GROUP_NAME, VM_NAME, vm_params
+    )
+    vm_result = poller.result()
+    print(f" > VM '{vm_result.name}' created.")
+    return vm_result
+
+# --- Main Execution ---
+def main():
+    credential = DefaultAzureCredential()
+    compute_client = ComputeManagementClient(credential, SUBSCRIPTION_ID)
+    network_client = NetworkManagementClient(credential, SUBSCRIPTION_ID)
+
+    # Get subnet ID (required for NIC creation)
+    subnet = network_client.subnets.get(RESOURCE_GROUP_NAME, VNET_NAME, SUBNET_NAME)
+
+    # Create NIC and VM
+    nic = create_nic(network_client, subnet.id)
+    vm = create_vm(compute_client, nic.id)
+
+    input("\nPress Enter to STOP the VM...")
+
+    # Stop VM
+    print(f"Stopping VM '{VM_NAME}'...")
+    poller = compute_client.virtual_machines.begin_power_off(RESOURCE_GROUP_NAME, VM_NAME)
+    poller.result()
+    print(f" > VM '{VM_NAME}' has been stopped.")
+
+    input("\nPress Enter to DELETE the VM...")
+
+    # Delete VM
+    print(f"Deleting VM '{VM_NAME}'...")
+    poller = compute_client.virtual_machines.begin_delete(RESOURCE_GROUP_NAME, VM_NAME)
+    poller.result()
+    print(f" > VM '{VM_NAME}' has been deleted.")
+
+    # Note: NIC and other resources should also be cleaned up in a real script.
+
+if __name__ == "__main__":
+    main()
+
